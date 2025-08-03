@@ -28,10 +28,9 @@ class InternalUser:
     email: str
 
 
-current_id = 0
-
-
 users: dict[int, InternalUser] = {}
+users[0] = InternalUser("Joe", "test_email@email.com")
+current_id = 1
 
 
 class User(BaseModel):
@@ -114,18 +113,22 @@ async def cancel():
     return "cancel"
 
 
+def create_ticket(user: InternalUser):
+    img = qrcode.make(f"Hello, {user.name}!")
+
+    with tempfile.NamedTemporaryFile(delete=False) as ticket:
+        img.save(ticket)
+
+    return ticket
+
+
 @app.get("/users/{user_id}")
 async def get_ticket(user_id: int, background_tasks: BackgroundTasks):
     user = users.get(user_id)
-
     if not user:
         return HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
 
-    img = qrcode.make(f"Hello, {user.name}!")
+    ticket_file = create_ticket(user)
 
-    with tempfile.NamedTemporaryFile(delete=False) as f:
-        img.save(f)
-
-    print(f.name)
-    background_tasks.add_task(lambda file: file.close(), f)
-    return FileResponse(f.name, media_type="image/png")
+    background_tasks.add_task(lambda file: os.remove(file.name), ticket_file)
+    return FileResponse(ticket_file.name, media_type="image/png")
