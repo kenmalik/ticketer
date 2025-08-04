@@ -1,44 +1,25 @@
-from dataclasses import dataclass
 import os
 
-import tempfile
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, status
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
 
-import qrcode
-
-from fpdf import FPDF
-
 import stripe
 
-from pydantic import BaseModel
+from internal import db
+from internal.ticket_generator import create_ticket
 
 app = FastAPI()
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
+users = db.Users()
+
+
 DOMAIN = os.environ["DOMAIN"]
 stripe.api_key = os.environ["STRIPE_API_KEY"]
 WEBHOOK_SECRET = os.environ["STRIPE_WEBHOOK_SECRET"]
-
-
-@dataclass
-class InternalUser:
-    name: str
-    email: str
-
-
-users: dict[int, InternalUser] = {}
-users[0] = InternalUser("Joe", "test_email@email.com")
-current_id = 1
-
-
-class User(BaseModel):
-    id: str
-    name: str
-    email: str
 
 
 @app.post("/webhook", status_code=200)
@@ -73,10 +54,7 @@ def fulfill_checkout(session_id):
     if checkout_session.payment_status != "unpaid":
         details = checkout_session.customer_details
         if details and details.name and details.email:
-            global current_id
-            users[current_id] = InternalUser(details.name, details.email)
-            user_id = current_id
-            current_id += 1
+            user_id = users.insert(details.name, details.email)
 
     return user_id
 
@@ -115,44 +93,13 @@ async def cancel():
     return "cancel"
 
 
-class TicketPDF(FPDF):
-    def header(self):
-        title = "Ticket"
-
-        self.set_font("helvetica", size=16)
-        width = self.get_string_width(title) + 6
-
-        self.set_x_to_center(width)
-        self.cell(width, 9, title, new_x="LMARGIN", new_y="NEXT", align="C")
-
-    def set_x_to_center(self, item_width: float):
-        self.set_x((self.epw - item_width) / 2 + self.l_margin)
-
-
-def create_ticket(user: InternalUser):
-    with tempfile.NamedTemporaryFile(delete=False) as f:
-        ticket = TicketPDF(format="Letter")
-        ticket.add_page()
-        ticket.set_title(f"Ticket | {user.name}")
-
-        img = qrcode.make(f"Hello, {user.name}!")
-        qr_height = ticket.eph / 4
-        qr_width = qr_height
-        ticket.set_x_to_center(qr_width)
-        ticket.image(img.get_image(), h=qr_height, w=qr_width, keep_aspect_ratio=True)
-
-        f.write(ticket.output())
-
-    return f
-
-
 @app.get("/users/{user_id}")
 async def get_ticket(user_id: int, background_tasks: BackgroundTasks):
     user = users.get(user_id)
     if not user:
         return HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
 
-    ticket_file = create_ticket(user)
+    ticket_file = create_ticket(user.name)
 
     background_tasks.add_task(lambda file: os.remove(file.name), ticket_file)
     return FileResponse(ticket_file.name, media_type="application/pdf")
