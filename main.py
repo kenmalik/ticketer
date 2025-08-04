@@ -8,6 +8,8 @@ from fastapi.responses import FileResponse, RedirectResponse
 
 import qrcode
 
+from fpdf import FPDF
+
 import stripe
 
 from pydantic import BaseModel
@@ -113,13 +115,35 @@ async def cancel():
     return "cancel"
 
 
+class TicketPDF(FPDF):
+    def header(self):
+        title = "Ticket"
+
+        self.set_font("helvetica", size=16)
+        width = self.get_string_width(title) + 6
+
+        self.set_x_to_center(width)
+        self.cell(width, 9, title, new_x="LMARGIN", new_y="NEXT", align="C")
+
+    def set_x_to_center(self, item_width: float):
+        self.set_x((self.epw - item_width) / 2 + self.l_margin)
+
+
 def create_ticket(user: InternalUser):
-    img = qrcode.make(f"Hello, {user.name}!")
+    with tempfile.NamedTemporaryFile(delete=False) as f:
+        ticket = TicketPDF(format="Letter")
+        ticket.add_page()
+        ticket.set_title(f"Ticket | {user.name}")
 
-    with tempfile.NamedTemporaryFile(delete=False) as ticket:
-        img.save(ticket)
+        img = qrcode.make(f"Hello, {user.name}!")
+        qr_height = ticket.eph / 4
+        qr_width = qr_height
+        ticket.set_x_to_center(qr_width)
+        ticket.image(img.get_image(), h=qr_height, w=qr_width, keep_aspect_ratio=True)
 
-    return ticket
+        f.write(ticket.output())
+
+    return f
 
 
 @app.get("/users/{user_id}")
@@ -131,4 +155,4 @@ async def get_ticket(user_id: int, background_tasks: BackgroundTasks):
     ticket_file = create_ticket(user)
 
     background_tasks.add_task(lambda file: os.remove(file.name), ticket_file)
-    return FileResponse(ticket_file.name, media_type="image/png")
+    return FileResponse(ticket_file.name, media_type="application/pdf")
