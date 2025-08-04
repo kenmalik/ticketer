@@ -77,9 +77,11 @@ async def buy_ticket():
         return str(e)
 
     if checkout_session.url:
-        return RedirectResponse(checkout_session.url, status_code=303)
+        return RedirectResponse(
+            checkout_session.url, status_code=status.HTTP_303_SEE_OTHER
+        )
     else:
-        return "Error getting checkout session"
+        return RedirectResponse(DOMAIN, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/success")
