@@ -1,9 +1,12 @@
 from contextlib import asynccontextmanager
+from functools import lru_cache
 import os
+from typing import Annotated
 
-from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, status
+from fastapi import Depends, FastAPI, Request, HTTPException, BackgroundTasks, status
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 import stripe
 
@@ -11,10 +14,24 @@ from internal import db
 from internal.ticket_generator import create_ticket
 
 
+class Settings(BaseSettings):
+    domain: str = "http://localhost:8000"
+    stripe_api_key: str
+    stripe_webhook_secret: str
+
+    model_config = SettingsConfigDict(env_file=".env")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     db.create_db_and_tables()
+    stripe.api_key = get_settings().stripe_api_key
     yield
+
+
+@lru_cache
+def get_settings():
+    return Settings()  # type: ignore  # Values read from .env file
 
 
 app = FastAPI(lifespan=lifespan)
@@ -25,18 +42,17 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 users = db.Users()
 
 
-DOMAIN = os.environ["DOMAIN"]
-stripe.api_key = os.environ["STRIPE_API_KEY"]
-WEBHOOK_SECRET = os.environ["STRIPE_WEBHOOK_SECRET"]
-
-
 @app.post("/webhook", status_code=200)
-async def handle_webhook(request: Request):
+async def handle_webhook(
+    request: Request, settings: Annotated[Settings, Depends(get_settings)]
+):
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature")
 
     try:
-        event = stripe.Webhook.construct_event(payload, sig_header, WEBHOOK_SECRET)
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, settings.stripe_webhook_secret
+        )
     except ValueError as e:
         return HTTPException(status_code=400, detail=f"Invalid payload: {e}")
     except stripe.SignatureVerificationError as e:
@@ -60,12 +76,13 @@ def fulfill_checkout(session_id):
     if checkout_session.payment_status != "unpaid":
         details = checkout_session.customer_details
         if details and details.name and details.email:
-            users.insert(details.name, details.email)
+            return users.insert(details.name, details.email).id
 
 
 @app.post("/ticket")
-async def buy_ticket():
+async def buy_ticket(settings: Annotated[Settings, Depends(get_settings)]):
     try:
+        print("Creating checkout session")
         checkout_session = stripe.checkout.Session.create(
             line_items=[
                 {
@@ -74,10 +91,11 @@ async def buy_ticket():
                 },
             ],
             mode="payment",
-            success_url=DOMAIN + "/success?session_id={CHECKOUT_SESSION_ID}",
-            cancel_url=DOMAIN + "/cancel",
+            success_url=settings.domain + "/success?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url=settings.domain + "/cancel",
         )
     except Exception as e:
+        print("Failed")
         return str(e)
 
     if checkout_session.url:
@@ -85,7 +103,7 @@ async def buy_ticket():
             checkout_session.url, status_code=status.HTTP_303_SEE_OTHER
         )
     else:
-        return RedirectResponse(DOMAIN, status_code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(settings.domain, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/success")
