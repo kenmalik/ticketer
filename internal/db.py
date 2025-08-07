@@ -20,6 +20,7 @@ engine = create_engine(sqlite_url, connect_args=connect_args)
 
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)
+    fill_mock_data()
 
 
 def fill_mock_data():
@@ -50,11 +51,13 @@ class User:
 
 class Users:
     def get(self, id: int) -> Attendee | None:
+        print("Getting attendee", id)
         with Session(engine) as session:
             statement = select(Attendee).where(Attendee.id == id)
             results = session.exec(statement)
+            attendee = results.first()
 
-        return results.first()
+        return attendee
 
     def insert(self, name: str, email: str) -> Attendee:
         attendee = Attendee(name=name, email=email)
