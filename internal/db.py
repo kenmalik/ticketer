@@ -1,4 +1,45 @@
 from dataclasses import dataclass
+from typing import Annotated
+
+from fastapi import Depends
+from sqlmodel import Session, Field, SQLModel, create_engine, select
+
+
+class Attendee(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    email: str = Field(index=True)
+
+
+sqlite_file_name = "database.db"
+sqlite_url = f"sqlite:///{sqlite_file_name}"
+
+connect_args = {"check_same_thread": False}
+engine = create_engine(sqlite_url, connect_args=connect_args)
+
+
+def create_db_and_tables():
+    SQLModel.metadata.create_all(engine)
+
+
+def fill_mock_data():
+    with Session(engine) as session:
+        attendee_1 = Attendee(name="Joe", email="Joe@email.com")
+        attendee_2 = Attendee(name="Jane", email="Jane@email.com")
+        attendee_3 = Attendee(name="Jacob", email="Jacob@email.com")
+        attendee_4 = Attendee(name="John", email="John@email.com")
+        attendee_5 = Attendee(name="Gerry", email="Gerry@email.com")
+
+        session.add_all([attendee_1, attendee_2, attendee_3, attendee_4, attendee_5])
+        session.commit()
+
+
+def get_session():
+    with Session(engine) as session:
+        yield session
+
+
+SessionDep = Annotated[Session, Depends(get_session)]
 
 
 @dataclass
@@ -8,14 +49,19 @@ class User:
 
 
 class Users:
-    def __init__(self):
-        self._users: dict[int, User] = {}
-        self._users[0] = User("Joe", "test_email@email.com")
-        self._current_id = 1
+    def get(self, id: int) -> Attendee | None:
+        with Session(engine) as session:
+            statement = select(Attendee).where(Attendee.id == id)
+            results = session.exec(statement)
 
-    def get(self, id: int):
-        return self._users[id]
+        return results.first()
 
-    def insert(self, name: str, email: str):
-        self._users[self._current_id] = User(name, email)
-        self._current_id += 1
+    def insert(self, name: str, email: str) -> Attendee:
+        attendee = Attendee(name=name, email=email)
+
+        with Session(engine) as session:
+            session.add(attendee)
+            session.commit()
+            session.refresh(attendee)
+
+        return attendee

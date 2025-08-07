@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import os
 
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, status
@@ -9,7 +10,14 @@ import stripe
 from internal import db
 from internal.ticket_generator import create_ticket
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    db.create_db_and_tables()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -49,14 +57,10 @@ def fulfill_checkout(session_id):
         expand=["customer"],
     )
 
-    user_id = -1
-
     if checkout_session.payment_status != "unpaid":
         details = checkout_session.customer_details
         if details and details.name and details.email:
-            user_id = users.insert(details.name, details.email)
-
-    return user_id
+            users.insert(details.name, details.email)
 
 
 @app.post("/ticket")
