@@ -1,17 +1,17 @@
 from contextlib import asynccontextmanager
 from functools import lru_cache
-import os
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Request, HTTPException, BackgroundTasks, status
+from fastapi import Depends, FastAPI, Request, HTTPException, status
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import RedirectResponse
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 import stripe
 
-from internal import db
-from internal.ticket_generator import create_ticket
+from .routes import attendees
+
+from .internal.dependencies import create_db_and_tables, insert_attendee
 
 
 class Settings(BaseSettings):
@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    db.create_db_and_tables()
+    create_db_and_tables()
     stripe.api_key = get_settings().stripe_api_key
     yield
 
@@ -35,11 +35,9 @@ def get_settings():
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(attendees.router)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-
-users = db.Users()
 
 
 @app.post("/webhook", status_code=200)
@@ -76,7 +74,7 @@ def fulfill_checkout(session_id):
     if checkout_session.payment_status != "unpaid":
         details = checkout_session.customer_details
         if details and details.name and details.email:
-            return users.insert(details.name, details.email).id
+            return insert_attendee(details.name, details.email).id
 
 
 @app.post("/ticket")
@@ -109,21 +107,9 @@ async def buy_ticket(settings: Annotated[Settings, Depends(get_settings)]):
 @app.get("/success")
 async def success(session_id: str):
     user_id = fulfill_checkout(session_id)
-    return RedirectResponse(f"/users/{user_id}")
+    return RedirectResponse(f"/attendees/{user_id}")
 
 
 @app.get("/cancel")
 async def cancel():
     return "cancel"
-
-
-@app.get("/users/{user_id}")
-async def get_ticket(user_id: int, background_tasks: BackgroundTasks):
-    user = users.get(user_id)
-    if not user:
-        return HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
-
-    ticket_file = create_ticket(user.name)
-
-    background_tasks.add_task(lambda file: os.remove(file.name), ticket_file)
-    return FileResponse(ticket_file.name, media_type="application/pdf")

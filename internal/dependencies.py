@@ -1,8 +1,7 @@
-from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import Depends
-from sqlmodel import Session, Field, SQLModel, create_engine, select
+from sqlmodel import Session, Field, SQLModel, create_engine
 
 
 class Attendee(SQLModel, table=True):
@@ -43,28 +42,12 @@ def get_session():
 SessionDep = Annotated[Session, Depends(get_session)]
 
 
-@dataclass
-class User:
-    name: str
-    email: str
+def insert_attendee(name: str, email: str) -> Attendee:
+    attendee = Attendee(name=name, email=email)
 
+    with Session(engine) as session:
+        session.add(attendee)
+        session.commit()
+        session.refresh(attendee)
 
-class Users:
-    def get(self, id: int) -> Attendee | None:
-        print("Getting attendee", id)
-        with Session(engine) as session:
-            statement = select(Attendee).where(Attendee.id == id)
-            results = session.exec(statement)
-            attendee = results.first()
-
-        return attendee
-
-    def insert(self, name: str, email: str) -> Attendee:
-        attendee = Attendee(name=name, email=email)
-
-        with Session(engine) as session:
-            session.add(attendee)
-            session.commit()
-            session.refresh(attendee)
-
-        return attendee
+    return attendee
